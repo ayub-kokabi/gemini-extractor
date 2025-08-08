@@ -8,6 +8,7 @@ import rarfile
 from google import genai
 from rich.console import Console
 from rich.live import Live
+import winreg
 
 console = Console()
 
@@ -22,6 +23,22 @@ def warning(msg):
 
 def error(msg):
     console.print(f"[red][✗][/red] {msg}")
+
+def find_winrar_path():
+    """Find WinRAR installation path from registry."""
+    reg_paths = [
+        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WinRAR.exe",
+        r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\WinRAR.exe"
+    ]
+    for reg_path in reg_paths:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as key:
+                value, _ = winreg.QueryValueEx(key, None)  # (default) value
+                if Path(value).exists():
+                    return str(Path(value))
+        except FileNotFoundError:
+            continue
+    return None
 
 def archive_requires_password(archive_path: Path) -> bool:
     """Check if archive is password-protected."""
@@ -72,9 +89,10 @@ def get_password_from_comment(comment_text: str):
         warning("No password found in archive comment.")
         return None
 
-def run_winrar_with_progress(cmd, output_folder):
+def run_winrar_with_progress(winrar_path, cmd_args, output_folder):
     """Run WinRAR command and show progress live."""
     try:
+        cmd = [winrar_path] + cmd_args
         process = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1
@@ -100,17 +118,23 @@ def extract_archive(archive_path: str):
         error("Only .zip and .rar files are supported.")
         return
 
-    output_folder = archive_path.with_suffix('')
-    if not shutil.which("winrar"):
-        error("WinRAR CLI not found. Please install and add it to PATH.")
+    winrar_path = find_winrar_path()
+    print(winrar_path)
+    if not winrar_path:
+        error("WinRAR not found. Please install WinRAR.")
         return
+    else:
+        info(f"Using WinRAR from: {winrar_path}")
+
+    output_folder = archive_path.with_suffix('')
 
     info(f"Checking if '{archive_path.name}' requires a password...")
     if not archive_requires_password(archive_path):
         info("No password required. Extracting directly...")
         try:
             run_winrar_with_progress(
-                ["winrar", 'x', str(archive_path), f'{output_folder}\\'],
+                winrar_path,
+                ['x', str(archive_path), f'{output_folder}\\'],
                 output_folder
             )
             success("Extraction completed successfully (no password).")
@@ -144,7 +168,8 @@ def extract_archive(archive_path: str):
     info(f"Extracting '{archive_path.name}' with detected password...")
     try:
         run_winrar_with_progress(
-            ["winrar", 'x', f'-p{password}', str(archive_path), f'{output_folder}\\'],
+            winrar_path,
+            ['x', f'-p{password}', str(archive_path), f'{output_folder}\\'],
             output_folder
         )
         success("Extraction completed successfully.")
